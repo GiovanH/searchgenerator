@@ -47,8 +47,10 @@ class TagPredicate(BasePredicate):
 
 
 class TagPredicateAO3(BasePredicate):
+    key = 'tag'
+
     def format(self) -> str:
-        return f'tag:"{self.value}"'
+        return f'{self.key}:"{self.value}"'
 
     def formatBinOp(self, taglist, op):
         return '(' + f" {op} ".join(
@@ -57,13 +59,16 @@ class TagPredicateAO3(BasePredicate):
         ) + ")"
 
 
+class NotPredicateAO3(TagPredicateAO3):
+    def format(self) -> str:
+        return f'NOT {super().format()}'
+
+
 class KVPredicateAO3(TagPredicateAO3):
     def __init__(self, value, key) -> None:
         self.key: str = key
         self.value: BasePredicate.VT = value
 
-    def format(self) -> str:
-        return f'{self.key}:"{self.value}"'
 
 
 class SitePredicate(TagPredicate):
@@ -204,7 +209,6 @@ class PredicateBagAO3(PredicateBag):
             MultiOrPredicate([*n.getPredicateOpts()], self.default_constructor)
             for n in self.narrowers
         ]
-        # print("andlist", repr(andlist))
         return [
             MultiAndPredicate(andlist, self.default_constructor).format()[1:-1]
         ]
@@ -235,6 +239,9 @@ def main() -> None:
         request = yaml.load(fp)
 
         def _load(kind) -> typing.Iterable[Narrower]:
+            if not isinstance(request[kind], dict):
+                return
+
             if request.get("type") == "resolved":
                 return request[kind]
             return [
@@ -248,13 +255,13 @@ def main() -> None:
             ]
 
         input_categories = {
-            "fandom": _load('fandom'),
-            "meta": _load('meta'),
-            "theme": _load('theme')
+            k: _load(k)
+            for k in request.keys()
         }
 
         bag_kind = request['bag_kind']
         patterns = request['patterns']
+        default_predicate = request['default_predicate']
 
     with open("_resolved.yaml", "w") as fp:
         yaml.dump({
@@ -268,10 +275,50 @@ def main() -> None:
         }, fp)
 
     for i in range(10):
-        bag = bag_kind()
+        # bag = bag_kind()
 
-        for pattern in random.choice(patterns):
-            bag.addRandom(input_categories[pattern])
+        def _readLevel(op, children):
+            child_items = []
+            for child in children:
+                if isinstance(child, dict):
+                    # TODO readlevel
+                    for ck, cv in child.items():
+                        # Should only be one
+                        child_items.append(_readLevel(ck, cv))
+                elif isinstance(child, str):
+                    narrower = random.choice(input_categories[child])
+                    predicate_opts = [*narrower.getPredicateOpts()]
+                    if len(predicate_opts) > 0:
+                        child_items.append(
+                            MultiOrPredicate(predicate_opts, default_predicate)
+                        )
+                else:
+                    raise NotImplementedError(child.__class__)
+            if op == 'AND':
+                return MultiAndPredicate(child_items, default_predicate)
+            elif op == 'OR':
+                return MultiOrPredicate(child_items, default_predicate)
+            else:
+                raise NotImplementedError(op)
+
+        for k, v in random.choice(patterns).items():
+            search = _readLevel(k, v).format()[1:-1]
+            print(search)
+
+            if bag_kind == PredicateBagAO3:
+                query = quote_plus(search)
+                print(f"https://archiveofourown.org/works/search?work_search%5Bquery%5D={query}\n")
+
+            # while k:
+            #     print(k, v)
+            #     if k == 'AND':
+            #         pass
+            #     elif k == 'OR':
+            #         pass
+            #     else:
+            #         k = None
+
+            # bag.addRandom(input_categories[pattern])
 
         # for narrowers in random.choice([
         #     (k_theme, k_theme), (k_theme, k_theme),
@@ -287,14 +334,9 @@ def main() -> None:
             print()
             # print(bag.formatRandom())
 
-        queries: list[str] = [*bag.formatAll()]
-        random.shuffle(queries)
-        print('\n'.join(queries[:5]))
-
-        if bag_kind == PredicateBagAO3:
-            for search in bag.formatAll():
-                query = quote_plus(search)
-                print(f"https://archiveofourown.org/works/search?work_search%5Bquery%5D={query}\n")
+        # queries: list[str] = [*bag.formatAll()]
+        # random.shuffle(queries)
+        # print('\n'.join(queries[:5]))
 
     # yaml.dump(yaml.load(dumps(bag)), sys.stdout)
 
