@@ -1,64 +1,130 @@
 #!/bin/python3
 import ruamel.yaml
-import sys
 import random
 import itertools
 import functools
+import sys
+import typing
+from urllib.parse import urlencode, quote_plus
 
 yaml = ruamel.yaml.YAML(typ='unsafe')
-# yaml.default_flow_style = False
 
-class PredicateBag():
-    """A collection of predicates"""
+debug_output = False
 
-    def __init__(self):
+
+class BasePredicate():
+    """A condition, like a host, tag, or rating"""
+
+    VT: typing.TypeAlias = str  # typing.TypeVar('VT')
+
+    def __init__(self, value: VT) -> None:
         super().__init__()
-        self.narrowers = []
+        self.value: BasePredicate.VT = value
 
-    def addNarrower(self, n):
-        self.narrowers.append(n)
+    def all_predicates(self) -> 'typing.Iterable[BasePredicate]':
+        yield self
 
-    def addRandom(self, ns):
-        ours = set(self.narrowers)
-        newopts = set(ns)
-        try:
-            choice = random.choice(list(newopts - ours))
-            self.addNarrower(choice)
-        except IndexError:
-            raise IndexError("No new possibilities to add", ours, newopts)
+    def format(self) -> str:
+        return str(self.value)
 
-    @property
-    def all_predicate_sets(self):
-        for n in self.narrowers:
-            yield n.getPredicateOpts()
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} {self.format()}>"
 
-    def __repr__(self):
-        return f"<{type(self).__name__} {[repr(n) for n in self.narrowers]}>"
 
-    @functools.lru_cache()
-    def formatJoin(self, predicate_list):
-        expanded_predicate_list = list(predicate_list)
-        for p in predicate_list:
-            if isinstance(p, MultiAndPredicate):
-                expanded_predicate_list.remove(p)
-                expanded_predicate_list += p.all_predicates()
+Predicates: typing.TypeAlias = typing.Iterable[BasePredicate]
+PredicateOrTagstr: typing.TypeAlias = typing.Union[BasePredicate, str]
 
-        return " ".join(
+
+class TagPredicate(BasePredicate):
+    def formatBinOp(self, taglist, op):
+        if op == "AND":
+            return " ".join(
+                p.format() for p in
+                [self, *taglist]
+            )
+        else:
+            raise ValueError(op)
+
+
+class TagPredicateAO3(BasePredicate):
+    def format(self) -> str:
+        return f'tag:"{self.value}"'
+
+    def formatBinOp(self, taglist, op):
+        return '(' + f" {op} ".join(
             p.format() for p in
-            sorted(set(expanded_predicate_list), key=lambda t: type(t).__name__)
+            [self, *taglist]
+        ) + ")"
+
+
+class KVPredicateAO3(TagPredicateAO3):
+    def __init__(self, value, key) -> None:
+        self.key: str = key
+        self.value: BasePredicate.VT = value
+
+    def format(self) -> str:
+        return f'{self.key}:"{self.value}"'
+
+
+class SitePredicate(TagPredicate):
+    def format(self):
+        return "SITE:" + self.value
+
+
+class PredicateContainer(BasePredicate):
+    def __init__(self, value: typing.Iterable[PredicateOrTagstr], default_constructor) -> None:
+        super().__init__(value)  # type: ignore[arg-type]
+        self.default_constructor: typing.Callable[[str], BasePredicate] = default_constructor
+
+    def all_predicates(self) -> Predicates:
+        yield from (
+            self.default_constructor(tag)
+            if isinstance(tag, str)
+            else tag
+            for tag in self.value
         )
 
-    def formatRandom(self):
-        permutation = [random.choice(predicates_set).format() for predicates_set in self.all_predicate_sets]
-        return self.formatJoin(permutation)
 
-    def formatAll(self):
-        return [*map(self.formatJoin, [*itertools.product(*self.all_predicate_sets)])]
+class MultiAndPredicate(PredicateContainer):
+    op = 'AND'
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} {self.value!r}>"
+
+    def format(self):
+        taglist = [*self.all_predicates()]
+        fallthrough = [*self.all_predicates()][0]
+
+        if len(taglist) > 1:
+            # print(self.__class__.__name__, 'format', fallthrough.__class__, taglist)
+            first, *tail = taglist
+            res = fallthrough.__class__.formatBinOp(first, tail, self.op)
+            # print(self.__class__.__name__, 'format resolved', repr(res))
+            return res
+        else:
+            return taglist[0].format()
+
+    def formatBinOp(self, taglist, op):
+        fallthrough = [*self.all_predicates()][0]
+
+        if len(taglist) > 0:
+            # print(self.__class__.__name__, 'formatBinOp fallthrough', op, fallthrough.__class__, taglist)
+            res = fallthrough.__class__.formatBinOp(self, taglist, op)
+            # print(self.__class__.__name__, 'formatBinOp resolved', repr(res))
+            return res
+        else:
+            # print(self.__class__.__name__, 'formatBinOp lone', taglist[0])
+            return self.format()
+
+
+class MultiOrPredicate(MultiAndPredicate):
+    op = 'OR'
+
 
 class Narrower():
     """A choice of topic to narrow a search to"""
 
-    def to_input(self):
+    def to_input(self) -> typing.Iterable[PredicateOrTagstr]:
         return [
             opt.value
             if isinstance(opt, TagPredicate)
@@ -66,68 +132,89 @@ class Narrower():
             for opt in self.predicate_opts
         ]
 
-    def __init__(self, name, predicateOpts=[]):
+    def __init__(self, name: str, predicate_opts: Predicates) -> None:
         super().__init__()
-        self.name = name
-        self.predicate_opts = []
-        self.addPredicateOpts(predicateOpts)
+        self.name: str = name
+        self.predicate_opts: list[BasePredicate] = []
+        self.addPredicateOpts(predicate_opts)
 
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.name!r}>"
 
-    def addPredicateOpt(self, newpred):
+    def addPredicateOpt(self, newpred: BasePredicate) -> None:
         self.predicate_opts.append(newpred)
 
-    def addPredicateOpts(self, newpreds):
+    def addPredicateOpts(self, newpreds: Predicates) -> None:
         for np in newpreds:
             self.addPredicateOpt(np)
 
-    def getPredicateOpts(self):
+    def getPredicateOpts(self) -> Predicates:
         yield from self.predicate_opts
 
-class BasePredicate():
-    """A condition, like a host, tag, or rating"""
 
-    def __init__(self, value=None):
+class PredicateBag():
+    """A collection of predicates"""
+    default_constructor: typing.Type[BasePredicate] = TagPredicate
+
+    def __init__(self) -> None:
         super().__init__()
-        self.value = value
+        self.narrowers: list[Narrower] = []
 
-    def all_predicates(self):
-        yield self
+    def addNarrower(self, n: Narrower) -> None:
+        self.narrowers.append(n)
 
-    def format(self):
-        return self.value
+    def addRandom(self, ns: typing.Iterable[Narrower]) -> None:
+        ours: set[Narrower] = set(self.narrowers)
+        newopts: set[Narrower] = set(ns)
+        try:
+            choice = random.choice(list(newopts - ours))
+            self.addNarrower(choice)
+        except IndexError as e:
+            raise IndexError("No new possibilities to add", ours, newopts) from e
 
-    def __repr__(self):
-        return f"<{type(self).__name__} {self.format()}>"
+    @property
+    def all_predicate_sets(self) -> typing.Iterable[Predicates]:
+        for n in self.narrowers:
+            yield n.getPredicateOpts()
 
-class TagPredicate(BasePredicate):
-    pass
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} {[repr(n) for n in self.narrowers]}>"
 
-class SitePredicate(BasePredicate):
-    def format(self):
-        return "SITE:" + self.value
+    def formatRandom(self) -> str:
+        permutation = [
+            random.choice([*predicates_set]).format()
+            for predicates_set
+            in self.all_predicate_sets
+        ]
+        return MultiAndPredicate(permutation, self.default_constructor).format()
+
+    def formatAll(self) -> typing.Iterable[str]:
+        return [
+            MultiAndPredicate(andlist, self.default_constructor).format()
+            for andlist in
+            itertools.product(*self.all_predicate_sets)
+        ]
 
 
-class PredicateContainer(BasePredicate):
-    def all_predicates(self):
-        yield from (
-            TagPredicate(tag)
-            if isinstance(tag, str)
-            else tag
-            for tag in self.value
-        )
+class PredicateBagAO3(PredicateBag):
+    default_constructor: typing.Type[BasePredicate] = TagPredicateAO3
 
-class MultiAndPredicate(PredicateContainer):
-    pass
-
+    def formatAll(self) -> typing.Iterable[str]:
+        andlist: list[MultiOrPredicate] = [
+            MultiOrPredicate([*n.getPredicateOpts()], self.default_constructor)
+            for n in self.narrowers
+        ]
+        # print("andlist", repr(andlist))
+        return [
+            MultiAndPredicate(andlist, self.default_constructor).format()[1:-1]
+        ]
 
 def dumps(obj):
     from io import StringIO
     with StringIO() as sp:
         yaml.dump(obj, sp)
         return sp.getvalue()
+
 
 def parse_args():
     import argparse
@@ -141,13 +228,13 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def main() -> None:
     args = parse_args()
 
     with open(args.input, "r") as fp:
         request = yaml.load(fp)
 
-        def _load(kind):
+        def _load(kind) -> typing.Iterable[Narrower]:
             if request.get("type") == "resolved":
                 return request[kind]
             return [
@@ -159,42 +246,57 @@ def main():
                 ])
                 for key, taglist in request[kind].items()
             ]
-        k_fandom = _load('fandom')
-        k_theme = _load('theme')
+
+        input_categories = {
+            "fandom": _load('fandom'),
+            "meta": _load('meta'),
+            "theme": _load('theme')
+        }
+
+        bag_kind = request['bag_kind']
+        patterns = request['patterns']
 
     with open("_resolved.yaml", "w") as fp:
         yaml.dump({
             "type": "resolved",
-            "fandom": k_fandom,
-            "theme": k_theme
+            **input_categories
         }, fp)
     with open("_resolved2.yaml", "w") as fp:
         yaml.dump({
-            "fandom": {n.name: n.to_input() for n in k_fandom},
-            "theme": {n.name: n.to_input() for n in k_theme}
+            "fandom": {n.name: n.to_input() for n in input_categories['fandom']},
+            "theme": {n.name: n.to_input() for n in input_categories['theme']}
         }, fp)
 
     for i in range(10):
-        bag = PredicateBag()
-        for narrowers in random.choice([
-            (k_theme, k_theme), (k_theme, k_theme),
-            (k_theme, k_fandom), (k_theme, k_fandom),
-            (k_theme,),
-            (k_fandom,),
-        ]):
-            bag.addRandom(narrowers)
+        bag = bag_kind()
 
-        # print(repr(bag))
-        # yaml.dump(bag, sys.stdout)
-        # print()
-        # print(bag.formatRandom())
-        queries = bag.formatAll()
+        for pattern in random.choice(patterns):
+            bag.addRandom(input_categories[pattern])
+
+        # for narrowers in random.choice([
+        #     (k_theme, k_theme), (k_theme, k_theme),
+        #     (k_theme, k_fandom), (k_theme, k_fandom),
+        #     # (k_theme,),
+        #     # (k_fandom,),
+        # ]):
+        #     bag.addRandom(narrowers)
+
+        if debug_output:
+            print(repr(bag))
+            yaml.dump(bag, sys.stdout)
+            print()
+            # print(bag.formatRandom())
+
+        queries: list[str] = [*bag.formatAll()]
         random.shuffle(queries)
         print('\n'.join(queries[:5]))
 
+        if bag_kind == PredicateBagAO3:
+            for search in bag.formatAll():
+                query = quote_plus(search)
+                print(f"https://archiveofourown.org/works/search?work_search%5Bquery%5D={query}\n")
+
     # yaml.dump(yaml.load(dumps(bag)), sys.stdout)
-
-
 
 
 if __name__ == "__main__":

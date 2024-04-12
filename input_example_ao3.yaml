@@ -1,0 +1,37 @@
+default_predicate: !!python/name:__main__.TagPredicateAO3
+bag_kind: !!python/name:__main__.PredicateBagAO3
+
+patterns:
+  - [meta, fandom, theme]
+  - [meta, fandom, theme, theme]
+
+meta:
+  meta:
+    - f/m
+    - f/f
+    - multi
+
+fandom:
+  steven_universe:
+    - Steven Universe (Cartoon)
+
+  steven_universe_favs:
+    - Amethyst (Steven Universe)
+    - Jasper (Steven Universe)
+
+  homestuck:
+    - Homestuck
+
+  homestuck_favs:
+    - Roxy Lalonde
+
+theme:
+  fluff:
+    - Fluff
+    - Slice of Life
+
+  angst:
+    - Angst
+
+  scify:
+    - Time Travel

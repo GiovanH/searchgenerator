@@ -1,4 +1,5 @@
 default_predicate: !!python/name:__main__.TagPredicate
+bag_kind: !!python/name:__main__.PredicateBag
 fandom:
   adventuretime:
     - !!python/object:__main__.SitePredicate {value: adventuretime.booru.org}
