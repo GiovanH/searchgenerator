@@ -5,7 +5,7 @@ import itertools
 import functools
 import sys
 import typing
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import urlencode, quote_plus, quote
 
 yaml = ruamel.yaml.YAML(typ='unsafe')
 
@@ -147,6 +147,8 @@ class Narrower():
         return f"<{type(self).__name__} {self.name!r}>"
 
     def addPredicateOpt(self, newpred: BasePredicate) -> None:
+        if not isinstance(newpred, BasePredicate):
+            raise TypeError(newpred)
         self.predicate_opts.append(newpred)
 
     def addPredicateOpts(self, newpreds: Predicates) -> None:
@@ -277,19 +279,28 @@ def main() -> None:
     for i in range(10):
         # bag = bag_kind()
 
+        selected_narrowers = set([None])
+
         def _readLevel(op, children):
+            nonlocal selected_narrowers
+
             child_items = []
             for child in children:
                 if isinstance(child, dict):
-                    # TODO readlevel
                     for ck, cv in child.items():
-                        # Should only be one
                         child_items.append(_readLevel(ck, cv))
                 elif isinstance(child, str):
-                    narrower = random.choice(input_categories[child])
+                    # narrower: typing.Optional[Narrower] = None
+                    # while narrower in selected_narrowers:
+                    narrower = random.choice([*set(input_categories[child]) - selected_narrowers])
+                    # print(narrower, selected_narrowers, child)
+                    if not narrower.name.startswith('_'):
+                        print(op, narrower)
                     predicate_opts = [*narrower.getPredicateOpts()]
                     if len(predicate_opts) > 0:
+                        selected_narrowers.add(narrower)
                         child_items.append(
+                            # narrower
                             MultiOrPredicate(predicate_opts, default_predicate)
                         )
                 else:
@@ -328,10 +339,10 @@ def main() -> None:
         # ]):
         #     bag.addRandom(narrowers)
 
-        if debug_output:
-            print(repr(bag))
-            yaml.dump(bag, sys.stdout)
-            print()
+        # if debug_output:
+        #     print(repr(bag))
+        #     yaml.dump(bag, sys.stdout)
+        #     print()
             # print(bag.formatRandom())
 
         # queries: list[str] = [*bag.formatAll()]
