@@ -2,35 +2,21 @@ default_predicate: !!python/name:__main__.TagPredicateAO3
 bag_kind: !!python/name:__main__.PredicateBagAO3
 
 patterns:
-  # - [meta, fandom, theme]
-  # - [meta, fandom, theme, theme]
   - AND:
     - nosquick
     - meta
     - fandom
     - theme
-  # - AND:
-  #   - meta
-  #   - theme
-  #   - OR:
-  #     - fandom
-  #     - fandom
-  # - AND:
-  #   - meta
-  #   - fandom
-  #   - OR:
-  #     - theme
-  #     - theme
 
 meta:
-  meta:
+  _meta:
     - f/m
     - f/f
     - multi
 
 nosquick:
-  nosquick:
-    - !!python/name:__main__.NotPredicateAO3 {value: Vriska Serket}
+  _nosquick:
+    - !!python/object:__main__.NotPredicateAO3 {value: 'Vriska Serket'}
 
 fandom:
   fandom:

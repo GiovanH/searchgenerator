@@ -276,6 +276,24 @@ def main() -> None:
             "theme": {n.name: n.to_input() for n in input_categories['theme']}
         }, fp)
 
+    with open("highlight.css", 'w') as fp:
+        for catname, catlist in input_categories.items():
+            color = {
+                'fandom': 'yellow',
+                'theme': 'lightblue'
+            }.get(catname, 'blue')
+            if isinstance(catlist, list):
+                for narrower in catlist:
+                    queries = [
+                        # quote(tag.value)
+                        tag.value.replace(' ', '%20')
+                        for tag in
+                        narrower.getPredicateOpts()
+                    ]
+                    if len(queries) > 0:
+                        selector = ', '.join(f'[href^="/tags/{query}"]' for query in queries)
+                        fp.write(f"{selector} {{ background: {color}; }}\n")
+
     for i in range(10):
         # bag = bag_kind()
 
@@ -299,10 +317,15 @@ def main() -> None:
                     predicate_opts = [*narrower.getPredicateOpts()]
                     if len(predicate_opts) > 0:
                         selected_narrowers.add(narrower)
-                        child_items.append(
-                            # narrower
-                            MultiOrPredicate(predicate_opts, default_predicate)
-                        )
+                        try:
+                            or_predicate = MultiOrPredicate(predicate_opts, default_predicate)
+                            or_predicate.format()  # verify this doesn't error
+                            child_items.append(
+                                # narrower
+                                or_predicate
+                            )
+                        except ValueError:
+                            child_items.append(random.choice(predicate_opts))
                 else:
                     raise NotImplementedError(child.__class__)
             if op == 'AND':
@@ -313,7 +336,13 @@ def main() -> None:
                 raise NotImplementedError(op)
 
         for k, v in random.choice(patterns).items():
-            search = _readLevel(k, v).format()[1:-1]
+            search = _readLevel(k, v).format()
+
+            if debug_output:
+                print(repr(search))
+                yaml.dump(search, sys.stdout)
+                print()
+
             print(search)
 
             if bag_kind == PredicateBagAO3:
